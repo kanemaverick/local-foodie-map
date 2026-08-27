@@ -46,7 +46,7 @@ function decodeHash() {
   const p = new URLSearchParams(h.slice(qIndex + 1))
   if (p.get('r')) out.detailId = p.get('r')
   const v = p.get('v')
-  if (v === 's') { out.view = 'search'; out.query = p.get('q') || '' }
+  if (v === 's' || p.get('q')) { out.view = 'search'; out.query = p.get('q') || '' }
   else if (v === 'hot') out.view = 'hot'
   else if (v === 'random') out.view = 'random'
   else if (v === 'nearby') out.view = 'nearby'

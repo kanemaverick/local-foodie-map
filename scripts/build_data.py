@@ -555,24 +555,23 @@ def strip_admin_prefix(name: str) -> str:
 
 def find_road(text_sq: str) -> str:
     t = squash(text_sq)
-    best = ""
+    # 路名通常是 3-6 字的干净短段: 收集全部匹配, 清洗过滤后取最早的合格者
+    cands = []
     for m in ROAD_RE.finditer(t):
-        seg = m.group()
-        if len(seg) <= 2:
+        seg = clean_store_candidate(m.group())
+        if len(seg) < 3 or len(seg) > 8:
             continue
         if m.start() > 0 and t[m.start() - 1] in BAD_ROAD_PREFIX:
             continue
         if seg[:2] in {"路上", "沿着", "中途", "半路", "哪条", "什么", "一条", "这条", "那条",
                        "哪里的", "一路"}:
             continue
-        if len(seg) > len(best):
-            best = seg
-    if best:
-        return strip_admin_prefix(best)[:20]
-    m = JUNCTION_RE.search(t)
-    if m:
-        s = max(0, m.start() - 10)
-        return squash(t[s:m.end()])[:24]
+        if CAND_BAD_RE.search(seg) or "十字路" in seg:
+            continue
+        cands.append((m.start(), seg))
+    if cands:
+        cands.sort(key=lambda x: x[0])
+        return cands[0][1][:20]
     return ""
 
 
@@ -587,21 +586,37 @@ def find_landmark(text_sq: str) -> str:
 
 
 BAD_HINT_START_RE = re.compile(
-    "^(?:里面|外边|外面|快到|路口|红灯|旁边|对面|附近|隔壁|楼下|楼上|有个|有一个|那块|"
+    "^(?:里面|外边|外面|快到|路口|红灯|旁边|对面|附近|隔壁|楼下|楼上|有个|有一|有家|那块|"
     "以前|曾经|当时|然后|还有|就是|好像|感觉|记得|读书|上学|小时候|初中|高中|大学|夜里|"
-    "晚上|早上|中午|每次|经常|偶尔|终于|他们|老板|味道|口味|推荐|必点|人均|老板娘|门头)")
+    "晚上|早上|中午|每次|经常|偶尔|终于|他们|老板|味道|口味|推荐|必点|人均|老板娘|门头|"
+    "比|更|最|还|也|又|而且|但是|不过|所以|他家|他家分店|这家分店|叫|后来|"
+    "后面|前面|背后|靠近)")
 GOOD_HINT_SUFFIX_RE = re.compile(
     "(?:饭馆|餐馆|食府|食堂|大排档|快餐|小吃|早餐|宵夜|粉店|米粉|米线|面馆|拉面|板面|"
     "香锅|麻辣烫|冒菜|串串|火锅|烧烤|烤肉|烤鱼|烧腊|叉烧|卤味|卤鹅|煲仔|炒饭|盖码|盖浇|"
     "猪脚饭|肠粉|糖水|甜品|奶茶|咖啡|饺子|馄饨|汤包|包子|烧饼|羊肉|牛肉|驴肉|羊汤|汤锅|"
     "鱼庄|菜馆|酒楼|餐厅|饭店|店|馆|铺|档|摊|坊|阁|苑|轩|灶)$")
 STORE_NAME_RE = re.compile(
-    "[一-鿿A-Za-z0-9·]{2,14}(?:饭馆|餐馆|食府|大排档|螺蛳粉|小米线|火锅鸡|串串香|烤肉拌饭|"
+    "[一-鿿A-Za-z0-9·]{2,12}?(?:饭馆|餐馆|食府|大排档|螺蛳粉|小米线|火锅鸡|串串香|烤肉拌饭|"
     "凉皮|肉夹馍|酸辣粉|过桥米线|牛肉粉|羊肉粉|螺狮粉|煲仔饭|猪脚饭|烧腊|隆江猪脚|"
-    "火锅|串串|冒菜|麻辣烫|烤肉|烤鱼|烧烤|米粉|米线|面馆|拉面|板面|包子|饺子|馄饨|汤包|"
+    "火锅|串串|冒菜|麻辣烫|麻辣拌|烤肉|烤鱼|烧烤|米粉|米线|面馆|拉面|板面|包子|饺子|馄饨|汤包|"
+    "烤包子|拌面|擀面皮|"
     "卤味|奶茶|甜品|糖水|炸鸡|汉堡|披萨|寿司|烘焙|糕点|咖啡馆|茶餐厅|小馆|苍蝇馆子|土鸭馆|"
-    "菜市场熟食|私房菜|农家菜|家常菜)"
+    "鸡公煲|私房菜|农家菜|家常菜)"
 )
+# 弱后缀: 单独出现时更像普通菜名, 仅当片段含"阿姨/记/氏"等称谓词时才承认是店名
+WEAK_NAME_RE = re.compile(
+    "[一-鿿A-Za-z0-9·]{2,10}?(?:小龙虾|生蚝|炒面|炒粉|炒饭|砂锅粥|艇仔粥|汤|粥|饭|"
+    "牛杂|羊杂|烤串|卤鹅|烧鹅|白切鸡|盐焗鸡|蛋烘糕|锅盔|煎饼|肠粉)")
+CALLOUT_RE = re.compile("(?:阿姨|大叔|大爷|大妈|叔叔|哥|姐|爷|婆|妹|嫂|记|氏|老妈|老爸|奶奶|爷爷)")
+HEAD_ADMIN_RE = re.compile(
+    "^[一-鿿]{1,6}?(?:省|自治区|特别行政区|市|区|县|镇|乡|街道|路|街|巷|大道|大街|号|弄|村|屯|盟|旗)")
+PRICE_TAIL_RE = re.compile("(?:一份|一碗|一杯|一块|一笼|一屉|\\d+元|块钱|块钱一份)")
+
+
+BAD_HINT_CONTAIN_RE = re.compile(
+    "(?:进去|左转|右转|直走|往前|大门|小路|十字路|尽头|左手|右手|导航|高德搜|百度搜|地图搜|有家|"
+    "的时候|顺便|可以|好吃|特别|靠近|后面|前面|背后)")
 
 
 def hint_looks_like_name(h: str, msg_sq: str) -> bool:
@@ -611,6 +626,14 @@ def hint_looks_like_name(h: str, msg_sq: str) -> bool:
     if len(h) > 18:
         return False
     if BAD_HINT_START_RE.match(h):
+        return False
+    if BAD_HINT_CONTAIN_RE.search(h):
+        return False
+    if re.search(r"(.{2,4})\1$", h):        # 尾部重复: '有福面馆的面馆'
+        return False
+    if re.search(r"\d+[串圆块份元碗个]", h):  # '有4串10圆' 数字量词是叙述
+        return False
+    if len(h) >= 6 and h.count(h[-2:]) >= 2:  # '面馆'出现两次
         return False
     if GOOD_HINT_SUFFIX_RE.search(h[-4:] if len(h) >= 4 else h):
         pass
@@ -635,25 +658,93 @@ def hint_looks_like_name(h: str, msg_sq: str) -> bool:
 CAND_BAD_RE = re.compile(
     "(?:对面|旁边|附近|隔壁|背后|前面|后面|门口|楼下|楼上|巷子|路口|公交站|地铁站|车站|"
     "火车站|机场|小区|广场|商场|市场|学校|大学|中学|小学|医院|教堂|公园|大厦|写字楼|夜市|"
-    "步行街|菜市场|一家|一口|一家家|有名|美食|小吃街|路口)")
+    "步行街|菜市场|一家|一口|一家家|有名|美食|小吃街|路口|有家|进去|左转|右转|直走|大门|小路|尽头|往前)")
+
+def clean_store_candidate(seg: str) -> str:
+    """剥掉候选头部粘连的行政区/道路段: '海市杨浦区黄兴路金陵阿姨…' -> '金陵阿姨…'"""
+    prev = None
+    while prev != seg:
+        prev = seg
+        m = HEAD_ADMIN_RE.match(seg)
+        if m:
+            rest = seg[m.end():]
+            if len(rest) >= 3:
+                seg = rest
+    return seg
+
 
 def extract_store_name(msg_sq: str):
-    """从正文提取形态像店名的短语, 取最早出现且干净者"""
+    """从正文提取店名: 枚举候选->清洗->打分(称谓词/长度/边界/价格词惩罚), 取最优"""
+    cands = {}
+
+    def add(seg, pos):
+        seg = clean_store_candidate(seg)
+        if not seg or seg[0] in "的有这那个旁边叫说想看去特很超巨真太不没还再才都更最":
+            return
+        if len(seg) >= 6 and seg.count(seg[-2:]) >= 2:   # '有福面馆的面馆'
+            return
+        if len(seg) < 3 or len(seg) > 12:
+            return
+        if CAND_BAD_RE.search(seg):
+            return
+        if PRICE_TAIL_RE.search(seg):
+            return
+        if RG is not None and RG.cities.get(seg) is not None:
+            return
+        if seg not in cands or pos < cands[seg]:
+            cands[seg] = pos
+
+    for m in STORE_NAME_RE.finditer(msg_sq):
+        add(m.group(), m.start())
+    for m in WEAK_NAME_RE.finditer(msg_sq):
+        seg = m.group()
+        if CALLOUT_RE.search(seg):          # 弱后缀必须有称谓词才像店名
+            add(seg, m.start())
+
+    if not cands:
+        return ""
+
+    def score(item):
+        seg, pos = item
+        s = 0
+        if CALLOUT_RE.search(seg):
+            s += 4
+        if 4 <= len(seg) <= 8:
+            s += 2
+        elif 9 <= len(seg) <= 10:
+            s += 1
+        if pos == 0 or msg_sq[pos - 1] in "，。！？、：；,.!?:;（）()“”\"'0123456789":
+            s += 2
+        return s
+
+    best = sorted(cands.items(), key=lambda kv: (-score(kv), kv[1]))
+    return best[0][0]
+
+
+# "旁边有一家石板神中神，" 这类句式: 有一家X + 标点 -> X 是无后缀品牌店名的强信号
+CUE_NAME_RE = re.compile(
+    "(?:有一家|有一间|有一户|开了一家|开了家|新开一家|新开一家店|家叫|店叫|牌子写着|招牌是)"
+    "\\s*[叫是]?([一-鿿A-Za-z0-9·]{2,8})(?=[，。！？,!.:;？?（(])")
+
+
+def extract_cue_name(msg_sq: str):
+    """抓取 '有一家X，' 句式中的无后缀品牌店名"""
     best = ""
     best_pos = 10 ** 9
-    for m in STORE_NAME_RE.finditer(msg_sq):
-        seg = m.group()
-        if seg.startswith(("的", "有", "这", "那", "个")):
+    for m in CUE_NAME_RE.finditer(msg_sq):
+        seg = clean_store_candidate(m.group(1))
+        if not seg or seg[0] in "的有这那个旁叫是特很超巨真太":
             continue
-        if len(seg) < 3 or len(seg) > 12:
+        if len(seg) < 2 or len(seg) > 8:
             continue
-        if CAND_BAD_RE.search(seg):
+        if CAND_BAD_RE.search(seg) or PRICE_TAIL_RE.search(seg):
             continue
-        if RG is not None and RG.cities.get(squash(seg)) is not None:
-            continue                      # 撞城市名的不是店名
-        pos = m.start()
-        if pos < best_pos:
-            best, best_pos = seg, pos
+        if len(seg) >= 6 and seg.count(seg[-2:]) >= 2:
+            continue
+        if RG is not None and RG.cities.get(seg) is not None:
+            continue
+        if m.start() < best_pos:
+            best, best_pos = seg, m.start()
     return best
 
 
@@ -665,11 +756,12 @@ def store_name_strong(seg: str) -> bool:
 
 SEARCHY_PREFIX_RE = re.compile(r"^(?:图|高德|百度|腾讯)?(?:地图)?(?:直接|可以)?(?:搜索|搜)")
 NARRATION_PREFIX_RE = re.compile(
-    r"^(?:吃完了|吃完|还能|再去|再去看看|可以去|然后|接着|顺便|记得|去了|路过时?)+")
+    r"^(?:吃完了|吃完|还能|再去|再去看看|可以去|然后|接着|顺便|记得|去了|路过时?|"
+    "有一个|有一家|有一间|有个|一家|还有一个|还有一个是)+")
 
 
 def tidy_descriptive(nm: str) -> str:
-    """描述性名称收尾清理: 去掉省市前缀与搜索词、叙述词开头"""
+    """描述性名称收尾清理: 去掉省市前缀与搜索词、叙述词开头, 修掉悬空'的'"""
     changed = True
     while changed and nm:
         changed = False
@@ -681,6 +773,9 @@ def tidy_descriptive(nm: str) -> str:
         if m:
             nm = nm[m.end():]
             changed = True
+        if nm.startswith("的"):
+            nm = nm[1:]
+            changed = True
         stripped = strip_admin_prefix(nm)
         if stripped != nm:
             nm = stripped
@@ -688,17 +783,39 @@ def tidy_descriptive(nm: str) -> str:
     return nm or "评论区推荐的小馆子"
 
 
+LM_JUNK_RE = re.compile("(?:好吃|而且|靠近|往前|饭量|路过|走到|骑着|导航)")
+
+
+def good_landmark(lm: str) -> bool:
+    """地标片段质量门: 太长/含叙述词/含位置黑词的不可用作名称锚点"""
+    if not lm or len(lm) < 2 or len(lm) > 10:
+        return False
+    if CAND_BAD_RE.search(lm) or LM_JUNK_RE.search(lm):
+        return False
+    return True
+
+
+def clean_hint(h: str) -> str:
+    """剥掉 hint 里的门牌段: 'XX路151B号小马大油边烧烤' -> '小马大油边烧烤'"""
+    h = re.sub(r"[0-9]{1,4}[A-Za-z]?号", "", squash(h))
+    return h.strip("。，,!! ")
+
+
 def descriptive_name(msg_sq: str, hint: str, region: dict, road: str,
                      landmark: str, dishes: list, dtype: str):
     """返回 (display_name, has_real_name)"""
+    hint = clean_hint(hint)
     h_valid = hint_looks_like_name(hint, msg_sq)
 
     # 从正文提取形态像店名的短语, 修复上游截断错误或补全缺失店名
     extracted = extract_store_name(msg_sq)
+    cue = extract_cue_name(msg_sq)
     if h_valid:
         if extracted and (extracted in hint or hint in extracted):
             return (hint if len(hint) >= len(extracted) else extracted, True)
         return (hint, True)
+    if cue and not BAD_HINT_CONTAIN_RE.search(cue):
+        return (cue, True)
     if store_name_strong(extracted):
         return (extracted, True)
     t = squash(msg_sq)
@@ -706,6 +823,8 @@ def descriptive_name(msg_sq: str, hint: str, region: dict, road: str,
     lm_re = DESCRIPTIVE_LANDMARK_RE
     for m in lm_re.finditer(t):
         lm = m.group()
+        if not good_landmark(strip_admin_prefix(lm)):
+            continue
         tail = t[m.end(): m.end() + 12]
         rm = REL_RE.match(tail) or REL_RE.search(tail[:8])
         if not rm:
@@ -730,17 +849,29 @@ def descriptive_name(msg_sq: str, hint: str, region: dict, road: str,
                 kind = cat_map.get(dtype, dtype.replace("地方菜馆", "家常菜馆")
                                    .replace("粉面", "粉面小店").replace("小吃快餐", "小吃店"))
         if kind and len(kind) >= 2:
-            return tidy_descriptive(f"{lm}{rm.group()}的{kind}"), False
-        return tidy_descriptive(f"{lm}{rm.group()}的小馆子"), False
+            cand = tidy_descriptive(f"{lm}{rm.group()}的{kind}")
+            if not BAD_HINT_CONTAIN_RE.search(cand):
+                return cand, False
+            continue
+        cand = tidy_descriptive(f"{lm}{rm.group()}的小馆子")
+        if not BAD_HINT_CONTAIN_RE.search(cand):
+            return cand, False
     base_lm = landmark or road
-    if base_lm:
+    if base_lm and good_landmark(strip_admin_prefix(base_lm)):
         if TYPE_TOKEN_RE.search(t):
-            return tidy_descriptive(f"{base_lm}旁的{TYPE_TOKEN_RE.search(t).group()}"), False
-        if dishes:
+            cand = tidy_descriptive(f"{base_lm}旁的{TYPE_TOKEN_RE.search(t).group()}")
+            if not BAD_HINT_CONTAIN_RE.search(cand):
+                return cand, False
+        elif dishes:
             d0 = dishes[0]
             suffix = d0 if d0.endswith(("店", "馆", "铺")) else d0 + "店"
-            return tidy_descriptive(f"{base_lm}旁的{suffix}"), False
-        return tidy_descriptive(f"{base_lm}旁的小馆子"), False
+            cand = tidy_descriptive(f"{base_lm}旁的{suffix}")
+            if not BAD_HINT_CONTAIN_RE.search(cand):
+                return cand, False
+        else:
+            cand = tidy_descriptive(f"{base_lm}旁的小馆子")
+            if not BAD_HINT_CONTAIN_RE.search(cand):
+                return cand, False
     area = region.get("dist") or region.get("city") or region.get("prov") or ""
     kw = ""
     if dishes:
